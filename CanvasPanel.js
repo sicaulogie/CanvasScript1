@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canvas Floating Panel (Modules, Assignments, Grades Quick Setup)
 // @namespace    https://prismlearning.instructure.com/
-// @version      2.9
+// @version      3.2
 // @description  Floating hideable panel on every page; Modules tools, Assignment setup, Gradebook bulk grading
 // @match        https://prismlearning.instructure.com/courses/*
 // @updateURL    https://raw.githubusercontent.com/sicaulogie/CanvasScript1/main/CanvasPanel.js
@@ -135,6 +135,28 @@
     });
   }
 
+  // Given a row from the scrollable grade pane, find its matching row in the
+  // frozen (left) student-name pane. SlickGrid keeps both panes vertically in
+  // sync by giving matching rows the same inline "top" position — even though
+  // the actual DOM nodes get destroyed/recycled as you scroll, whatever node
+  // currently sits at a given "top" always belongs to the same student on
+  // both sides at that instant. Matching by "top" (not by array index) is
+  // what makes this robust to virtualization.
+  // Extract the numeric assignment ID from a matched header element. Canvas
+  // puts it right in the header's class list as a token like "assignment_2289173".
+  function getAssignmentIdFromHeader(headerEl) {
+    const match = headerEl.className.match(/\bassignment_(\d+)\b/);
+    return match ? match[1] : null;
+  }
+
+  // Extract the numeric student ID directly from a row's own class list.
+  // Canvas puts it right there as a token like "student_36717" — no need to
+  // cross-reference a separate frozen name column or rely on row position.
+  function getStudentIdFromRow(rowEl) {
+    const match = rowEl.className.match(/\bstudent_(\d+)\b/);
+    return match ? match[1] : null;
+  }
+
   async function applyBulkGrades(body) {
     const targetName = body.querySelector('#tm-assign-name').value.trim().toLowerCase();
     const targetGrade = body.querySelector('#tm-assign-grade').value.trim();
@@ -154,21 +176,21 @@
     statusEl.style.color = '#0374B5';
     statusEl.textContent = 'Searching for column...';
 
-    // 1. Find the target column header
+    // 1. Find the target column header, and pull the assignment's numeric ID
+    //    out of it. We use this ID (not column position) to find the right
+    //    cell on every row, so nothing here depends on column order/index.
     const headers = document.querySelectorAll('.slick-header-column');
-    let targetColIndex = -1;
-    let headerContainer = null;
+    let assignmentId = null;
 
     for (let i = 0; i < headers.length; i++) {
       const titleEl = headers[i].querySelector('.assignment-name');
       if (titleEl && titleEl.textContent.toLowerCase().includes(targetName)) {
-        headerContainer = headers[i].parentElement;
-        targetColIndex = Array.prototype.indexOf.call(headerContainer.children, headers[i]);
+        assignmentId = getAssignmentIdFromHeader(headers[i]);
         break;
       }
     }
 
-    if (targetColIndex === -1) {
+    if (!assignmentId) {
       statusEl.style.color = '#c00';
       statusEl.textContent = 'Assignment not found. Check the name.';
       runBtn.disabled = false;
@@ -176,61 +198,110 @@
       return;
     }
 
+    const cellSelector = '.assignment_' + assignmentId;
     let appliedCount = 0;
     let skippedCount = 0;
-    let rowIndex = 0;
+    const processedIds = new Set(); // Students we've already handled.
 
     statusEl.textContent = `Processing visible rows...`;
 
-    // 2. Iterate dynamically using a while loop to handle Canvas re-renders (stale DOM)
+    // 2. Repeatedly scan the CURRENTLY rendered rows and process whichever
+    //    visible student we haven't already handled. We identify both the
+    //    row (student) and the cell (assignment) by the IDs baked into their
+    //    own class names — e.g. "student_36717" and "assignment_2289173" —
+    //    rather than by array index or DOM position. That makes this
+    //    immune to Canvas recycling/reordering row DOM nodes as the grid
+    //    scrolls (which is what caused the old index-based version to
+    //    randomly skip/duplicate students).
+    //    Rows belonging to the frozen name pane (if any) simply won't have
+    //    a matching `.assignment_<id>` cell and are skipped automatically.
+    let stagnantPasses = 0;
     while (true) {
-      const rows = document.querySelectorAll('.grid-canvas-right .slick-row, .grid-canvas .slick-row');
-      if (rowIndex >= rows.length) break; // Finished all visible rows
+      const rows = document.querySelectorAll('.slick-row');
 
-      const row = rows[rowIndex];
-      const cell = row.children[targetColIndex];
-      
-      if (!cell) {
-        rowIndex++;
-        continue;
+      let targetRow = null;
+      let targetId = null;
+      let targetCell = null;
+      for (const row of rows) {
+        const id = getStudentIdFromRow(row);
+        if (!id || processedIds.has(id)) continue;
+        const cell = row.querySelector(cellSelector);
+        if (!cell) continue; // Wrong pane, or this column isn't in this row.
+        targetRow = row;
+        targetId = id;
+        targetCell = cell;
+        break;
       }
 
+      if (!targetRow) {
+        // Nothing new to process among currently rendered rows. Give the
+        // grid a brief moment in case a scroll/render is still settling,
+        // then bail out after a couple of empty passes in a row.
+        stagnantPasses++;
+        if (stagnantPasses >= 2) break;
+        await sleep(300);
+        continue;
+      }
+      stagnantPasses = 0;
+
       if (onlyNeedsGrading) {
-        const hasIcon = cell.querySelector('.icon-not-graded');
-        const hasText = cell.textContent.includes('Needs Grading');
-        
+        const hasIcon = targetCell.querySelector('.icon-not-graded');
+        const hasText = targetCell.textContent.includes('Needs Grading');
         if (!hasIcon && !hasText) {
           skippedCount++;
-          rowIndex++;
-          continue; 
+          processedIds.add(targetId);
+          continue;
         }
       }
 
       // Open the input cell
-      cell.click();
+      targetCell.click();
       await sleep(150); // Buffer for UI to render input
 
-      // Re-query the cell just in case the click detached the element from the DOM
-      const activeRows = document.querySelectorAll('.grid-canvas-right .slick-row, .grid-canvas .slick-row');
-      const activeCell = activeRows[rowIndex] ? activeRows[rowIndex].children[targetColIndex] : cell;
+      // Re-find the exact same cell by ID (student_X + assignment_Y), not by
+      // position, in case the click caused a re-render that recycled this
+      // DOM node. The CSS selector below finds it precisely regardless.
+      const activeCell = document.querySelector(`.student_${targetId} ${cellSelector}`) || targetCell;
 
       const input = activeCell.querySelector('input[type="text"]');
       if (input) {
         setReactInputValue(input, targetGrade);
-        
+
         // Dispatch "Enter" key to commit the grade and trigger Canvas save
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
         appliedCount++;
-        
+
         await sleep(250); // Wait for Canvas save and auto-advance animation
-        
-        // Canvas auto-focuses the next cell's input on Enter. We blur it so our loop doesn't trip over it.
+
+        // Canvas auto-advances the active cell to the NEXT row in this same
+        // column after Enter, and opens it in edit mode (an empty input) —
+        // regardless of that student's actual status (not submitted,
+        // already graded, or submitted-ungraded). We blur it to close that
+        // editor, but blurring doesn't instantly repaint the cell back to
+        // its normal display (with the "Needs Grading" icon/text, if any).
+        // Give React a moment to finish that repaint BEFORE the next loop
+        // iteration inspects this same cell for the "onlyNeedsGrading"
+        // filter — otherwise we'd be reading a half-reverted, editor-mode
+        // DOM and could wrongly conclude "not Needs Grading" for a student
+        // who actually still needs a grade, just because Canvas happened to
+        // auto-open their cell as a side effect of the previous student.
         if (document.activeElement && document.activeElement.tagName === 'INPUT') {
             document.activeElement.blur();
+            await sleep(150); // Let the cell's display state settle before we judge it.
         }
       }
 
-      rowIndex++;
+      // Mark this student done AFTER processing, using the ID we captured
+      // up front — never re-derive it from a possibly-recycled node.
+      processedIds.add(targetId);
+    }
+
+    // Final safety net: if a Canvas auto-advance left an editor open on some
+    // row we never got to (e.g. the loop ended right after processing the
+    // second-to-last row), close it so we don't leave the Gradebook UI in a
+    // half-open editing state.
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+      document.activeElement.blur();
     }
 
     statusEl.style.color = '#2d7d2d';
