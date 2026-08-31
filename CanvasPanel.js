@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Canvas Floating Panel (Modules, Assignments, Grades Quick Setup)
 // @namespace    https://prismlearning.instructure.com/
-// @version      3.3
-// @description  Floating hideable panel on every page; Modules tools, Assignment setup, Gradebook bulk grading
+// @version      3.4
+// @description  Floating hideable panel on every page; Manual collapse button added, no auto-close
 // @match        https://prismlearning.instructure.com/courses/*
 // @updateURL    https://raw.githubusercontent.com/sicaulogie/CanvasScript1/main/CanvasPanel.js
 // @downloadURL  https://raw.githubusercontent.com/sicaulogie/CanvasScript1/main/CanvasPanel.js
@@ -30,7 +30,7 @@
     renderDefaultContent(panel);
   }
 
-  // ---------- FLOATING PANEL SHELL (used on every page) ----------
+  // ---------- FLOATING PANEL SHELL ----------
   function createFloatingPanel() {
     const wrap = document.createElement('div');
     wrap.id = 'tm-side-panel';
@@ -66,20 +66,30 @@
         white-space: nowrap;
         flex-shrink: 0;
       ">Quick Panel</div>
-      <div id="tm-panel-body" style="padding:12px; flex:1; overflow:auto; max-height:80vh; display:flex; flex-direction:column;"></div>
+      <div style="flex:1; display:flex; flex-direction:column; background:#fff; overflow:hidden;">
+        <div style="background:#f0f0f0; border-bottom:1px solid #ccc; display:flex; justify-content:flex-start; padding:2px;">
+          <button id="tm-close-btn" style="background:none; border:none; cursor:pointer; font-weight:bold; color:#555; padding:4px 10px; font-size:14px; letter-spacing: 1px;" title="Collapse Panel">&gt;&gt;</button>
+        </div>
+        <div id="tm-panel-body" style="padding:12px; flex:1; overflow:auto; max-height:75vh; display:flex; flex-direction:column;"></div>
+      </div>
     `;
     document.body.appendChild(wrap);
 
     const tab = wrap.querySelector('#tm-panel-tab');
+    const closeBtn = wrap.querySelector('#tm-close-btn');
     let open = false;
+
     function setOpen(state) {
       open = state;
       wrap.style.transform = open ? 'translateX(0)' : 'translateX(calc(100% - 32px))';
     }
+
+    // Open/Close via the side tab or the new >> button
     tab.addEventListener('click', () => setOpen(!open));
-    document.addEventListener('click', (e) => {
-      if (open && !wrap.contains(e.target)) setOpen(false);
-    });
+    closeBtn.addEventListener('click', () => setOpen(false));
+    
+    // Note: The document 'click' event listener that previously auto-closed 
+    // the panel has been entirely removed so the prompt will stay visible.
 
     return wrap.querySelector('#tm-panel-body');
   }
@@ -148,7 +158,6 @@
     return match ? match[1] : null;
   }
 
-  // Returns a Promise that resolves when the user clicks a button in the manual intervention UI
   function askUserForLateGrade(body, defaultScore) {
     return new Promise((resolve) => {
       const container = body.querySelector('#tm-prompt-container');
@@ -193,7 +202,6 @@
         }
       });
 
-      // Focus the input so the user can just press Enter
       setTimeout(() => inputEl.focus(), 50);
     });
   }
@@ -279,7 +287,6 @@
         }
       }
 
-      // Open the input cell
       targetCell.click();
       await sleep(150);
 
@@ -289,7 +296,6 @@
       if (input) {
         let finalGradeToApply = targetGrade;
 
-        // If the Canvas auto-late penalty set it to '0' on click, or it was already '0'
         if (input.value === '0') {
           statusEl.style.color = '#c00';
           statusEl.textContent = 'Paused: Manual check required.';
@@ -299,7 +305,6 @@
           statusEl.style.color = '#0374B5';
           statusEl.textContent = 'Processing visible rows...';
 
-          // Since the user might have clicked away during the manual check, ensure the cell is still active
           let activeInput = document.querySelector(`.student_${targetId} ${cellSelector} input[type="text"]`);
           if (!activeInput) {
              const reopenCell = document.querySelector(`.student_${targetId} ${cellSelector}`);
@@ -310,7 +315,6 @@
           }
         }
 
-        // Re-query the input node just to be absolutely sure it's valid before dispatching events
         const finalInputNode = document.querySelector(`.student_${targetId} ${cellSelector} input[type="text"]`) || input;
         
         if (finalInputNode) {
@@ -673,7 +677,6 @@
     }
   }
 
-  // ---------- CLEAN DESCRIPTION FORMATTING (via raw HTML editor toggle) ----------
   async function cleanDescriptionFormatting() {
     const iframe = document.querySelector('#assignment_description_ifr');
     if (!iframe || !iframe.contentDocument || !iframe.contentDocument.body) {
