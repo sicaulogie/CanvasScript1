@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Canvas Floating Panel (Modules, Assignments, Grades Quick Setup)
 // @namespace    https://prismlearning.instructure.com/
-// @version      3.4
-// @description  Floating hideable panel on every page; Manual collapse button added, no auto-close
+// @version      3.5
+// @description  Floating hideable panel on every page; Manual collapse button added, prompt auto-selects and defaults if empty
 // @match        https://prismlearning.instructure.com/courses/*
 // @updateURL    https://raw.githubusercontent.com/sicaulogie/CanvasScript1/main/CanvasPanel.js
 // @downloadURL  https://raw.githubusercontent.com/sicaulogie/CanvasScript1/main/CanvasPanel.js
@@ -84,13 +84,9 @@
       wrap.style.transform = open ? 'translateX(0)' : 'translateX(calc(100% - 32px))';
     }
 
-    // Open/Close via the side tab or the new >> button
     tab.addEventListener('click', () => setOpen(!open));
     closeBtn.addEventListener('click', () => setOpen(false));
     
-    // Note: The document 'click' event listener that previously auto-closed 
-    // the panel has been entirely removed so the prompt will stay visible.
-
     return wrap.querySelector('#tm-panel-body');
   }
 
@@ -186,7 +182,12 @@
       const cleanup = () => { container.innerHTML = ''; };
 
       applyBtn.addEventListener('click', () => {
-        resolve(inputEl.value.trim());
+        let val = inputEl.value.trim();
+        // Fallback to defaultScore if the input was left completely empty
+        if (val === '') {
+            val = defaultScore;
+        }
+        resolve(val);
         cleanup();
       });
 
@@ -202,7 +203,11 @@
         }
       });
 
-      setTimeout(() => inputEl.focus(), 50);
+      // Focus and highlight the text so the user can easily overwrite it
+      setTimeout(() => {
+          inputEl.focus();
+          inputEl.select();
+      }, 50);
     });
   }
 
